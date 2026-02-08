@@ -115,7 +115,7 @@ cmd_search() {
     case "$QUERY" in
       *@*) SEARCH_TYPE="email" ;;
       *)
-        STRIPPED=$(echo "$QUERY" | tr -d ' ()-+.')
+        STRIPPED=$(echo "$QUERY" | tr -d ' ().+-')
         if echo "$STRIPPED" | grep -qE '^[0-9]{3,}$'; then
           SEARCH_TYPE="number"
         elif echo "$QUERY" | grep -qE '^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$'; then
