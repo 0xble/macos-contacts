@@ -1,0 +1,510 @@
+#!/bin/sh
+# CLI tool to search, create, edit, and delete macOS Contacts.
+# Outputs JSON. Usage: contacts <command> [options]
+
+set -e
+
+# ─────────────────────────────────────────────
+# Help
+# ─────────────────────────────────────────────
+
+print_usage() {
+  echo "Usage: contacts <command> [options]"
+  echo ""
+  echo "Commands:"
+  echo "  search [--name|--number|--email] <query>   Search contacts (default)"
+  echo "  add --first <name> [options]                Create a new contact"
+  echo "  edit <query> [options]                      Edit an existing contact"
+  echo "  delete <query>                              Delete a contact"
+  echo ""
+  echo "Run 'contacts <command> --help' for details on each command."
+}
+
+print_search_help() {
+  echo "Usage: contacts search [--name|--number|--email] <query>"
+  echo "       contacts <query>                (search is the default command)"
+  echo ""
+  echo "Search type is auto-detected if no flag is given:"
+  echo "  Contains \"@\" or looks like a domain  ->  email"
+  echo "  Mostly digits                         ->  phone number"
+  echo "  Otherwise                             ->  name"
+  echo ""
+  echo "Examples:"
+  echo "  contacts search \"John Doe\""
+  echo "  contacts \"555-1234\""
+  echo "  contacts --email \"example.com\""
+}
+
+print_add_help() {
+  echo "Usage: contacts add --first <name> [options]"
+  echo ""
+  echo "Options:"
+  echo "  --first <name>       First name (required)"
+  echo "  --last <name>        Last name"
+  echo "  --company <name>     Organization"
+  echo "  --phone <number>     Phone number"
+  echo "  --phone-label <lbl>  Phone label (default: Mobile)"
+  echo "  --email <address>    Email address"
+  echo "  --email-label <lbl>  Email label (default: Home)"
+  echo ""
+  echo "Examples:"
+  echo "  contacts add --first John --last Doe --phone \"555-1234\" --email john@example.com"
+  echo "  contacts add --first Jane --company \"Acme Corp\""
+  echo "  contacts add --first Bob --phone \"555-0000\" --phone-label Work"
+}
+
+print_edit_help() {
+  echo "Usage: contacts edit <query> [options]"
+  echo ""
+  echo "Finds a contact by name, then applies changes."
+  echo "If multiple contacts match, lists them and exits."
+  echo ""
+  echo "Options:"
+  echo "  --first <name>       Set first name"
+  echo "  --last <name>        Set last name"
+  echo "  --company <name>     Set organization"
+  echo "  --add-phone <num>    Add a phone number"
+  echo "  --add-email <addr>   Add an email address"
+  echo "  --rm-phone <num>     Remove a phone number"
+  echo "  --rm-email <addr>    Remove an email address"
+  echo ""
+  echo "Examples:"
+  echo "  contacts edit \"John Doe\" --company \"New Corp\""
+  echo "  contacts edit \"Jane\" --add-phone \"555-9999\" --rm-email old@example.com"
+}
+
+print_delete_help() {
+  echo "Usage: contacts delete <query>"
+  echo ""
+  echo "Finds a contact by name and deletes it."
+  echo "If multiple contacts match, lists them and exits."
+  echo "Requires confirmation unless --yes is passed."
+  echo ""
+  echo "Options:"
+  echo "  --yes    Skip confirmation prompt"
+  echo ""
+  echo "Examples:"
+  echo "  contacts delete \"John Doe\""
+  echo "  contacts delete \"John Doe\" --yes"
+}
+
+# ─────────────────────────────────────────────
+# Search
+# ─────────────────────────────────────────────
+
+cmd_search() {
+  SEARCH_TYPE=""
+  QUERY=""
+
+  case "$1" in
+    --name)   SEARCH_TYPE="name";   shift ;;
+    --number) SEARCH_TYPE="number"; shift ;;
+    --email)  SEARCH_TYPE="email";  shift ;;
+    --help)   print_search_help; exit 0 ;;
+  esac
+
+  QUERY="$*"
+
+  if [ -z "$QUERY" ]; then
+    print_search_help
+    exit 1
+  fi
+
+  # Auto-detect search type
+  if [ -z "$SEARCH_TYPE" ]; then
+    case "$QUERY" in
+      *@*) SEARCH_TYPE="email" ;;
+      *)
+        STRIPPED=$(echo "$QUERY" | tr -d ' ()-+.')
+        if echo "$STRIPPED" | grep -qE '^[0-9]{3,}$'; then
+          SEARCH_TYPE="number"
+        elif echo "$QUERY" | grep -qE '^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$'; then
+          SEARCH_TYPE="email"
+        else
+          SEARCH_TYPE="name"
+        fi
+        ;;
+    esac
+  fi
+
+  osascript -l JavaScript <<JXAEOF
+const app = Application("Contacts");
+const people = app.people();
+const results = [];
+const query = "$QUERY";
+const searchType = "$SEARCH_TYPE";
+
+$(cat <<'HELPERS'
+function cleanLabel(raw) {
+  if (!raw) return "";
+  return raw.replace(/^_\$!</, "").replace(/>!\$_$/, "");
+}
+
+function serializePerson(person) {
+  const firstName = person.firstName() || "";
+  const lastName = person.lastName() || "";
+  return {
+    firstName,
+    lastName,
+    fullName: (firstName + " " + lastName).trim(),
+    organization: person.organization() || "",
+    phones: person.phones().map(p => ({ label: cleanLabel(p.label()), value: p.value() || "" })),
+    emails: person.emails().map(e => ({ label: cleanLabel(e.label()), value: e.value() || "" })),
+    addresses: person.addresses().map(a => ({
+      label: cleanLabel(a.label()),
+      street: a.street() || "",
+      city: a.city() || "",
+      state: a.state() || "",
+      zip: a.zip() || "",
+      country: a.country() || ""
+    }))
+  };
+}
+HELPERS
+)
+
+if (searchType === "number") {
+  const searchNumber = query.replace(/[\s\-\(\)\+\.]/g, "");
+  for (const person of people) {
+    const phones = person.phones();
+    for (const phone of phones) {
+      const phoneValue = phone.value().replace(/[\s\-\(\)\+\.]/g, "");
+      if (phoneValue.includes(searchNumber) || searchNumber.includes(phoneValue)) {
+        results.push(serializePerson(person));
+        break;
+      }
+    }
+  }
+} else if (searchType === "email") {
+  const searchEmail = query.toLowerCase();
+  for (const person of people) {
+    const emails = person.emails();
+    for (const email of emails) {
+      const emailValue = email.value().toLowerCase();
+      if (emailValue.includes(searchEmail) || searchEmail.includes(emailValue)) {
+        results.push(serializePerson(person));
+        break;
+      }
+    }
+  }
+} else {
+  const searchName = query.toLowerCase();
+  for (const person of people) {
+    const firstName = (person.firstName() || "").toLowerCase();
+    const lastName = (person.lastName() || "").toLowerCase();
+    const fullName = (firstName + " " + lastName).trim();
+    const org = (person.organization() || "").toLowerCase();
+
+    if (fullName.includes(searchName) || searchName.includes(fullName) ||
+        firstName.includes(searchName) || lastName.includes(searchName) ||
+        org.includes(searchName)) {
+      results.push(serializePerson(person));
+    }
+  }
+}
+
+JSON.stringify(results, null, 2);
+JXAEOF
+}
+
+# ─────────────────────────────────────────────
+# Add
+# ─────────────────────────────────────────────
+
+cmd_add() {
+  FIRST="" LAST="" COMPANY="" PHONE="" EMAIL=""
+  PHONE_LABEL="Mobile" EMAIL_LABEL="Home"
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --first)       FIRST="$2";       shift 2 ;;
+      --last)        LAST="$2";        shift 2 ;;
+      --company)     COMPANY="$2";     shift 2 ;;
+      --phone)       PHONE="$2";       shift 2 ;;
+      --phone-label) PHONE_LABEL="$2"; shift 2 ;;
+      --email)       EMAIL="$2";       shift 2 ;;
+      --email-label) EMAIL_LABEL="$2"; shift 2 ;;
+      --help)        print_add_help; exit 0 ;;
+      *)             echo "Unknown option: $1"; print_add_help; exit 1 ;;
+    esac
+  done
+
+  if [ -z "$FIRST" ]; then
+    echo "Error: --first is required."
+    echo ""
+    print_add_help
+    exit 1
+  fi
+
+  osascript -l JavaScript <<JXAEOF
+const app = Application("Contacts");
+
+const person = app.Person({
+  firstName: "$FIRST",
+  lastName: "$LAST",
+  organization: "$COMPANY"
+});
+app.add(person);
+
+$([ -n "$PHONE" ] && cat <<PHONEJS
+person.phones.push(app.Phone({ label: "$PHONE_LABEL", value: "$PHONE" }));
+PHONEJS
+)
+
+$([ -n "$EMAIL" ] && cat <<EMAILJS
+person.emails.push(app.Email({ label: "$EMAIL_LABEL", value: "$EMAIL" }));
+EMAILJS
+)
+
+app.save();
+
+const firstName = person.firstName() || "";
+const lastName = person.lastName() || "";
+JSON.stringify({
+  created: true,
+  fullName: (firstName + " " + lastName).trim(),
+  firstName: firstName,
+  lastName: lastName,
+  organization: person.organization() || "",
+  phones: person.phones().map(p => ({ label: p.label() || "", value: p.value() || "" })),
+  emails: person.emails().map(e => ({ label: e.label() || "", value: e.value() || "" }))
+}, null, 2);
+JXAEOF
+}
+
+# ─────────────────────────────────────────────
+# Edit
+# ─────────────────────────────────────────────
+
+cmd_edit() {
+  if [ -z "$1" ] || [ "$1" = "--help" ]; then
+    print_edit_help
+    [ "$1" = "--help" ] && exit 0 || exit 1
+  fi
+
+  QUERY="$1"; shift
+  SET_FIRST="" SET_LAST="" SET_COMPANY=""
+  ADD_PHONES="" ADD_EMAILS=""
+  RM_PHONES="" RM_EMAILS=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --first)     SET_FIRST="$2";   shift 2 ;;
+      --last)      SET_LAST="$2";    shift 2 ;;
+      --company)   SET_COMPANY="$2"; shift 2 ;;
+      --add-phone) ADD_PHONES="$ADD_PHONES|$2"; shift 2 ;;
+      --add-email) ADD_EMAILS="$ADD_EMAILS|$2"; shift 2 ;;
+      --rm-phone)  RM_PHONES="$RM_PHONES|$2";  shift 2 ;;
+      --rm-email)  RM_EMAILS="$RM_EMAILS|$2";  shift 2 ;;
+      *)           echo "Unknown option: $1"; print_edit_help; exit 1 ;;
+    esac
+  done
+
+  osascript -l JavaScript <<JXAEOF
+const app = Application("Contacts");
+const people = app.people();
+const query = "$QUERY".toLowerCase();
+
+// Find matching contacts
+const matches = [];
+for (const person of people) {
+  const firstName = (person.firstName() || "").toLowerCase();
+  const lastName = (person.lastName() || "").toLowerCase();
+  const fullName = (firstName + " " + lastName).trim();
+  if (fullName.includes(query) || query.includes(fullName) ||
+      firstName.includes(query) || lastName.includes(query)) {
+    matches.push(person);
+  }
+}
+
+if (matches.length === 0) {
+  JSON.stringify({ error: "No contacts found matching: $QUERY" }, null, 2);
+} else if (matches.length > 1) {
+  const names = matches.map(p => {
+    const f = p.firstName() || "";
+    const l = p.lastName() || "";
+    return (f + " " + l).trim();
+  });
+  JSON.stringify({ error: "Multiple contacts match. Be more specific.", matches: names }, null, 2);
+} else {
+  const person = matches[0];
+
+  // Set fields
+  const setFirst = "$SET_FIRST";
+  const setLast = "$SET_LAST";
+  const setCompany = "$SET_COMPANY";
+  if (setFirst) person.firstName = setFirst;
+  if (setLast) person.lastName = setLast;
+  if (setCompany) person.organization = setCompany;
+
+  // Remove phones
+  const rmPhones = "$RM_PHONES".split("|").filter(x => x);
+  for (const rm of rmPhones) {
+    const normalized = rm.replace(/[\s\-\(\)\+\.]/g, "");
+    const phones = person.phones();
+    for (let i = phones.length - 1; i >= 0; i--) {
+      const val = phones[i].value().replace(/[\s\-\(\)\+\.]/g, "");
+      if (val.includes(normalized) || normalized.includes(val)) {
+        app.delete(phones[i]);
+      }
+    }
+  }
+
+  // Remove emails
+  const rmEmails = "$RM_EMAILS".split("|").filter(x => x);
+  for (const rm of rmEmails) {
+    const emails = person.emails();
+    for (let i = emails.length - 1; i >= 0; i--) {
+      if (emails[i].value().toLowerCase() === rm.toLowerCase()) {
+        app.delete(emails[i]);
+      }
+    }
+  }
+
+  // Add phones
+  const addPhones = "$ADD_PHONES".split("|").filter(x => x);
+  for (const ph of addPhones) {
+    person.phones.push(app.Phone({ label: "Mobile", value: ph }));
+  }
+
+  // Add emails
+  const addEmails = "$ADD_EMAILS".split("|").filter(x => x);
+  for (const em of addEmails) {
+    person.emails.push(app.Email({ label: "Home", value: em }));
+  }
+
+  app.save();
+
+  const firstName = person.firstName() || "";
+  const lastName = person.lastName() || "";
+
+  function cleanLabel(raw) {
+    if (!raw) return "";
+    return raw.replace(/^_\\\$!</, "").replace(/>!\\\$_$/, "");
+  }
+
+  JSON.stringify({
+    updated: true,
+    fullName: (firstName + " " + lastName).trim(),
+    firstName: firstName,
+    lastName: lastName,
+    organization: person.organization() || "",
+    phones: person.phones().map(p => ({ label: cleanLabel(p.label()), value: p.value() || "" })),
+    emails: person.emails().map(e => ({ label: cleanLabel(e.label()), value: e.value() || "" }))
+  }, null, 2);
+}
+JXAEOF
+}
+
+# ─────────────────────────────────────────────
+# Delete
+# ─────────────────────────────────────────────
+
+cmd_delete() {
+  if [ -z "$1" ] || [ "$1" = "--help" ]; then
+    print_delete_help
+    [ "$1" = "--help" ] && exit 0 || exit 1
+  fi
+
+  SKIP_CONFIRM=""
+  QUERY=""
+
+  # Parse args: query is everything that's not --yes
+  for arg in "$@"; do
+    case "$arg" in
+      --yes) SKIP_CONFIRM="1" ;;
+      *)     QUERY="$QUERY $arg" ;;
+    esac
+  done
+  QUERY=$(echo "$QUERY" | sed 's/^ //')
+
+  if [ -z "$QUERY" ]; then
+    echo "Error: no search query provided."
+    print_delete_help
+    exit 1
+  fi
+
+  # First, find the contact(s)
+  MATCH_RESULT=$(osascript -l JavaScript <<JXAEOF
+const app = Application("Contacts");
+const people = app.people();
+const query = "$QUERY".toLowerCase();
+
+const matches = [];
+for (const person of people) {
+  const firstName = (person.firstName() || "").toLowerCase();
+  const lastName = (person.lastName() || "").toLowerCase();
+  const fullName = (firstName + " " + lastName).trim();
+  if (fullName.includes(query) || query.includes(fullName) ||
+      firstName.includes(query) || lastName.includes(query)) {
+    const f = person.firstName() || "";
+    const l = person.lastName() || "";
+    matches.push((f + " " + l).trim());
+  }
+}
+
+JSON.stringify({ count: matches.length, matches: matches });
+JXAEOF
+  )
+
+  MATCH_COUNT=$(echo "$MATCH_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['count'])")
+
+  if [ "$MATCH_COUNT" = "0" ]; then
+    echo "{\"error\": \"No contacts found matching: $QUERY\"}"
+    exit 1
+  elif [ "$MATCH_COUNT" != "1" ]; then
+    echo "$MATCH_RESULT" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(json.dumps({'error': 'Multiple contacts match. Be more specific.', 'matches': d['matches']}, indent=2))
+"
+    exit 1
+  fi
+
+  MATCH_NAME=$(echo "$MATCH_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['matches'][0])")
+
+  # Confirm
+  if [ -z "$SKIP_CONFIRM" ]; then
+    printf "Delete \"%s\"? [y/N] " "$MATCH_NAME"
+    read -r REPLY
+    case "$REPLY" in
+      y|Y|yes|YES) ;;
+      *) echo "Cancelled."; exit 0 ;;
+    esac
+  fi
+
+  # Delete
+  osascript -l JavaScript <<JXAEOF
+const app = Application("Contacts");
+const people = app.people();
+const query = "$QUERY".toLowerCase();
+
+for (const person of people) {
+  const firstName = (person.firstName() || "").toLowerCase();
+  const lastName = (person.lastName() || "").toLowerCase();
+  const fullName = (firstName + " " + lastName).trim();
+  if (fullName.includes(query) || query.includes(fullName) ||
+      firstName.includes(query) || lastName.includes(query)) {
+    const name = ((person.firstName() || "") + " " + (person.lastName() || "")).trim();
+    app.delete(person);
+    app.save();
+    JSON.stringify({ deleted: true, fullName: name }, null, 2);
+    break;
+  }
+}
+JXAEOF
+}
+
+# ─────────────────────────────────────────────
+# Route subcommand
+# ─────────────────────────────────────────────
+
+case "$1" in
+  search)  shift; cmd_search "$@" ;;
+  add)     shift; cmd_add "$@" ;;
+  edit)    shift; cmd_edit "$@" ;;
+  delete)  shift; cmd_delete "$@" ;;
+  --help|-h|"")  print_usage; exit 0 ;;
+  # Default: treat as search query
+  *)       cmd_search "$@" ;;
+esac
