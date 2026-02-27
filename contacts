@@ -4,6 +4,9 @@
 
 set -e
 
+OSASCRIPT_BIN="/usr/bin/osascript"
+PYTHON3_BIN="/usr/bin/python3"
+
 # ─────────────────────────────────────────────
 # Help
 # ─────────────────────────────────────────────
@@ -127,14 +130,7 @@ cmd_search() {
     esac
   fi
 
-  osascript -l JavaScript <<JXAEOF
-const app = Application("Contacts");
-const people = app.people();
-const results = [];
-const query = "$QUERY";
-const searchType = "$SEARCH_TYPE";
-
-$(cat <<'HELPERS'
+  "$OSASCRIPT_BIN" -l JavaScript - "$QUERY" "$SEARCH_TYPE" <<'JXAEOF'
 function cleanLabel(raw) {
   if (!raw) return "";
   return raw.replace(/^_\$!</, "").replace(/>!\$_$/, "");
@@ -160,50 +156,56 @@ function serializePerson(person) {
     }))
   };
 }
-HELPERS
-)
 
-if (searchType === "number") {
-  const searchNumber = query.replace(/[\s\-\(\)\+\.]/g, "");
-  for (const person of people) {
-    const phones = person.phones();
-    for (const phone of phones) {
-      const phoneValue = phone.value().replace(/[\s\-\(\)\+\.]/g, "");
-      if (phoneValue.includes(searchNumber) || searchNumber.includes(phoneValue)) {
+function run(argv) {
+  const app = Application("Contacts");
+  const people = app.people();
+  const results = [];
+  const query = argv[0] || "";
+  const searchType = argv[1] || "name";
+
+  if (searchType === "number") {
+    const searchNumber = query.replace(/[\s\-\(\)\+\.]/g, "");
+    for (const person of people) {
+      const phones = person.phones();
+      for (const phone of phones) {
+        const phoneValue = (phone.value() || "").replace(/[\s\-\(\)\+\.]/g, "");
+        if (phoneValue.includes(searchNumber) || searchNumber.includes(phoneValue)) {
+          results.push(serializePerson(person));
+          break;
+        }
+      }
+    }
+  } else if (searchType === "email") {
+    const searchEmail = query.toLowerCase();
+    for (const person of people) {
+      const emails = person.emails();
+      for (const email of emails) {
+        const emailValue = (email.value() || "").toLowerCase();
+        if (emailValue.includes(searchEmail) || searchEmail.includes(emailValue)) {
+          results.push(serializePerson(person));
+          break;
+        }
+      }
+    }
+  } else {
+    const searchName = query.toLowerCase();
+    for (const person of people) {
+      const firstName = (person.firstName() || "").toLowerCase();
+      const lastName = (person.lastName() || "").toLowerCase();
+      const fullName = (firstName + " " + lastName).trim();
+      const org = (person.organization() || "").toLowerCase();
+
+      if (fullName.includes(searchName) || searchName.includes(fullName) ||
+          firstName.includes(searchName) || lastName.includes(searchName) ||
+          org.includes(searchName)) {
         results.push(serializePerson(person));
-        break;
       }
     }
   }
-} else if (searchType === "email") {
-  const searchEmail = query.toLowerCase();
-  for (const person of people) {
-    const emails = person.emails();
-    for (const email of emails) {
-      const emailValue = email.value().toLowerCase();
-      if (emailValue.includes(searchEmail) || searchEmail.includes(emailValue)) {
-        results.push(serializePerson(person));
-        break;
-      }
-    }
-  }
-} else {
-  const searchName = query.toLowerCase();
-  for (const person of people) {
-    const firstName = (person.firstName() || "").toLowerCase();
-    const lastName = (person.lastName() || "").toLowerCase();
-    const fullName = (firstName + " " + lastName).trim();
-    const org = (person.organization() || "").toLowerCase();
 
-    if (fullName.includes(searchName) || searchName.includes(fullName) ||
-        firstName.includes(searchName) || lastName.includes(searchName) ||
-        org.includes(searchName)) {
-      results.push(serializePerson(person));
-    }
-  }
+  return JSON.stringify(results, null, 2);
 }
-
-JSON.stringify(results, null, 2);
 JXAEOF
 }
 
@@ -236,39 +238,42 @@ cmd_add() {
     exit 1
   fi
 
-  osascript -l JavaScript <<JXAEOF
-const app = Application("Contacts");
+  "$OSASCRIPT_BIN" -l JavaScript - "$FIRST" "$LAST" "$COMPANY" "$PHONE_LABEL" "$PHONE" "$EMAIL_LABEL" "$EMAIL" <<'JXAEOF'
+function run(argv) {
+  const app = Application("Contacts");
+  const person = app.Person({
+    firstName: argv[0] || "",
+    lastName: argv[1] || "",
+    organization: argv[2] || ""
+  });
+  app.add(person);
 
-const person = app.Person({
-  firstName: "$FIRST",
-  lastName: "$LAST",
-  organization: "$COMPANY"
-});
-app.add(person);
+  const phoneLabel = argv[3] || "Mobile";
+  const phone = argv[4] || "";
+  if (phone) {
+    person.phones.push(app.Phone({ label: phoneLabel, value: phone }));
+  }
 
-$([ -n "$PHONE" ] && cat <<PHONEJS
-person.phones.push(app.Phone({ label: "$PHONE_LABEL", value: "$PHONE" }));
-PHONEJS
-)
+  const emailLabel = argv[5] || "Home";
+  const email = argv[6] || "";
+  if (email) {
+    person.emails.push(app.Email({ label: emailLabel, value: email }));
+  }
 
-$([ -n "$EMAIL" ] && cat <<EMAILJS
-person.emails.push(app.Email({ label: "$EMAIL_LABEL", value: "$EMAIL" }));
-EMAILJS
-)
+  app.save();
 
-app.save();
-
-const firstName = person.firstName() || "";
-const lastName = person.lastName() || "";
-JSON.stringify({
-  created: true,
-  fullName: (firstName + " " + lastName).trim(),
-  firstName: firstName,
-  lastName: lastName,
-  organization: person.organization() || "",
-  phones: person.phones().map(p => ({ label: p.label() || "", value: p.value() || "" })),
-  emails: person.emails().map(e => ({ label: e.label() || "", value: e.value() || "" }))
-}, null, 2);
+  const firstName = person.firstName() || "";
+  const lastName = person.lastName() || "";
+  return JSON.stringify({
+    created: true,
+    fullName: (firstName + " " + lastName).trim(),
+    firstName: firstName,
+    lastName: lastName,
+    organization: person.organization() || "",
+    phones: person.phones().map(p => ({ label: p.label() || "", value: p.value() || "" })),
+    emails: person.emails().map(e => ({ label: e.label() || "", value: e.value() || "" }))
+  }, null, 2);
+}
 JXAEOF
 }
 
@@ -300,50 +305,58 @@ cmd_edit() {
     esac
   done
 
-  osascript -l JavaScript <<JXAEOF
-const app = Application("Contacts");
-const people = app.people();
-const query = "$QUERY".toLowerCase();
-
-// Find matching contacts
-const matches = [];
-for (const person of people) {
-  const firstName = (person.firstName() || "").toLowerCase();
-  const lastName = (person.lastName() || "").toLowerCase();
-  const fullName = (firstName + " " + lastName).trim();
-  if (fullName.includes(query) || query.includes(fullName) ||
-      firstName.includes(query) || lastName.includes(query)) {
-    matches.push(person);
-  }
+  "$OSASCRIPT_BIN" -l JavaScript - "$QUERY" "$SET_FIRST" "$SET_LAST" "$SET_COMPANY" "$ADD_PHONES" "$ADD_EMAILS" "$RM_PHONES" "$RM_EMAILS" <<'JXAEOF'
+function cleanLabel(raw) {
+  if (!raw) return "";
+  return raw.replace(/^_\\\$!</, "").replace(/>!\\\$_$/, "");
 }
 
-if (matches.length === 0) {
-  JSON.stringify({ error: "No contacts found matching: $QUERY" }, null, 2);
-} else if (matches.length > 1) {
-  const names = matches.map(p => {
-    const f = p.firstName() || "";
-    const l = p.lastName() || "";
-    return (f + " " + l).trim();
-  });
-  JSON.stringify({ error: "Multiple contacts match. Be more specific.", matches: names }, null, 2);
-} else {
+function run(argv) {
+  const app = Application("Contacts");
+  const people = app.people();
+  const query = (argv[0] || "").toLowerCase();
+
+  // Find matching contacts
+  const matches = [];
+  for (const person of people) {
+    const firstName = (person.firstName() || "").toLowerCase();
+    const lastName = (person.lastName() || "").toLowerCase();
+    const fullName = (firstName + " " + lastName).trim();
+    if (fullName.includes(query) || query.includes(fullName) ||
+        firstName.includes(query) || lastName.includes(query)) {
+      matches.push(person);
+    }
+  }
+
+  if (matches.length === 0) {
+    return JSON.stringify({ error: "No contacts found matching: " + (argv[0] || "") }, null, 2);
+  }
+  if (matches.length > 1) {
+    const names = matches.map(p => {
+      const f = p.firstName() || "";
+      const l = p.lastName() || "";
+      return (f + " " + l).trim();
+    });
+    return JSON.stringify({ error: "Multiple contacts match. Be more specific.", matches: names }, null, 2);
+  }
+
   const person = matches[0];
 
   // Set fields
-  const setFirst = "$SET_FIRST";
-  const setLast = "$SET_LAST";
-  const setCompany = "$SET_COMPANY";
+  const setFirst = argv[1] || "";
+  const setLast = argv[2] || "";
+  const setCompany = argv[3] || "";
   if (setFirst) person.firstName = setFirst;
   if (setLast) person.lastName = setLast;
   if (setCompany) person.organization = setCompany;
 
   // Remove phones
-  const rmPhones = "$RM_PHONES".split("|").filter(x => x);
+  const rmPhones = (argv[6] || "").split("|").filter(x => x);
   for (const rm of rmPhones) {
     const normalized = rm.replace(/[\s\-\(\)\+\.]/g, "");
     const phones = person.phones();
     for (let i = phones.length - 1; i >= 0; i--) {
-      const val = phones[i].value().replace(/[\s\-\(\)\+\.]/g, "");
+      const val = (phones[i].value() || "").replace(/[\s\-\(\)\+\.]/g, "");
       if (val.includes(normalized) || normalized.includes(val)) {
         app.delete(phones[i]);
       }
@@ -351,24 +364,24 @@ if (matches.length === 0) {
   }
 
   // Remove emails
-  const rmEmails = "$RM_EMAILS".split("|").filter(x => x);
+  const rmEmails = (argv[7] || "").split("|").filter(x => x);
   for (const rm of rmEmails) {
     const emails = person.emails();
     for (let i = emails.length - 1; i >= 0; i--) {
-      if (emails[i].value().toLowerCase() === rm.toLowerCase()) {
+      if ((emails[i].value() || "").toLowerCase() === rm.toLowerCase()) {
         app.delete(emails[i]);
       }
     }
   }
 
   // Add phones
-  const addPhones = "$ADD_PHONES".split("|").filter(x => x);
+  const addPhones = (argv[4] || "").split("|").filter(x => x);
   for (const ph of addPhones) {
     person.phones.push(app.Phone({ label: "Mobile", value: ph }));
   }
 
   // Add emails
-  const addEmails = "$ADD_EMAILS".split("|").filter(x => x);
+  const addEmails = (argv[5] || "").split("|").filter(x => x);
   for (const em of addEmails) {
     person.emails.push(app.Email({ label: "Home", value: em }));
   }
@@ -378,12 +391,7 @@ if (matches.length === 0) {
   const firstName = person.firstName() || "";
   const lastName = person.lastName() || "";
 
-  function cleanLabel(raw) {
-    if (!raw) return "";
-    return raw.replace(/^_\\\$!</, "").replace(/>!\\\$_$/, "");
-  }
-
-  JSON.stringify({
+  return JSON.stringify({
     updated: true,
     fullName: (firstName + " " + lastName).trim(),
     firstName: firstName,
@@ -425,35 +433,41 @@ cmd_delete() {
   fi
 
   # First, find the contact(s)
-  MATCH_RESULT=$(osascript -l JavaScript <<JXAEOF
-const app = Application("Contacts");
-const people = app.people();
-const query = "$QUERY".toLowerCase();
+  MATCH_RESULT=$("$OSASCRIPT_BIN" -l JavaScript - "$QUERY" <<'JXAEOF'
+function run(argv) {
+  const app = Application("Contacts");
+  const people = app.people();
+  const query = (argv[0] || "").toLowerCase();
 
-const matches = [];
-for (const person of people) {
-  const firstName = (person.firstName() || "").toLowerCase();
-  const lastName = (person.lastName() || "").toLowerCase();
-  const fullName = (firstName + " " + lastName).trim();
-  if (fullName.includes(query) || query.includes(fullName) ||
-      firstName.includes(query) || lastName.includes(query)) {
-    const f = person.firstName() || "";
-    const l = person.lastName() || "";
-    matches.push((f + " " + l).trim());
+  const matches = [];
+  for (const person of people) {
+    const firstName = (person.firstName() || "").toLowerCase();
+    const lastName = (person.lastName() || "").toLowerCase();
+    const fullName = (firstName + " " + lastName).trim();
+    if (fullName.includes(query) || query.includes(fullName) ||
+        firstName.includes(query) || lastName.includes(query)) {
+      const f = person.firstName() || "";
+      const l = person.lastName() || "";
+      matches.push((f + " " + l).trim());
+    }
   }
-}
 
-JSON.stringify({ count: matches.length, matches: matches });
+  return JSON.stringify({ count: matches.length, matches: matches });
+}
 JXAEOF
   )
 
-  MATCH_COUNT=$(echo "$MATCH_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['count'])")
+  MATCH_COUNT=$(echo "$MATCH_RESULT" | "$PYTHON3_BIN" -c "import sys,json; print(json.load(sys.stdin)['count'])")
 
   if [ "$MATCH_COUNT" = "0" ]; then
-    echo "{\"error\": \"No contacts found matching: $QUERY\"}"
+    printf '%s' "$QUERY" | "$PYTHON3_BIN" -c '
+import json, sys
+query = sys.stdin.read()
+print(json.dumps({"error": f"No contacts found matching: {query}"}, indent=2))
+'
     exit 1
   elif [ "$MATCH_COUNT" != "1" ]; then
-    echo "$MATCH_RESULT" | python3 -c "
+    echo "$MATCH_RESULT" | "$PYTHON3_BIN" -c "
 import sys, json
 d = json.load(sys.stdin)
 print(json.dumps({'error': 'Multiple contacts match. Be more specific.', 'matches': d['matches']}, indent=2))
@@ -461,7 +475,7 @@ print(json.dumps({'error': 'Multiple contacts match. Be more specific.', 'matche
     exit 1
   fi
 
-  MATCH_NAME=$(echo "$MATCH_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['matches'][0])")
+  MATCH_NAME=$(echo "$MATCH_RESULT" | "$PYTHON3_BIN" -c "import sys,json; print(json.load(sys.stdin)['matches'][0])")
 
   # Confirm
   if [ -z "$SKIP_CONFIRM" ]; then
@@ -474,23 +488,25 @@ print(json.dumps({'error': 'Multiple contacts match. Be more specific.', 'matche
   fi
 
   # Delete
-  osascript -l JavaScript <<JXAEOF
-const app = Application("Contacts");
-const people = app.people();
-const query = "$QUERY".toLowerCase();
+  "$OSASCRIPT_BIN" -l JavaScript - "$QUERY" <<'JXAEOF'
+function run(argv) {
+  const app = Application("Contacts");
+  const people = app.people();
+  const query = (argv[0] || "").toLowerCase();
 
-for (const person of people) {
-  const firstName = (person.firstName() || "").toLowerCase();
-  const lastName = (person.lastName() || "").toLowerCase();
-  const fullName = (firstName + " " + lastName).trim();
-  if (fullName.includes(query) || query.includes(fullName) ||
-      firstName.includes(query) || lastName.includes(query)) {
-    const name = ((person.firstName() || "") + " " + (person.lastName() || "")).trim();
-    app.delete(person);
-    app.save();
-    JSON.stringify({ deleted: true, fullName: name }, null, 2);
-    break;
+  for (const person of people) {
+    const firstName = (person.firstName() || "").toLowerCase();
+    const lastName = (person.lastName() || "").toLowerCase();
+    const fullName = (firstName + " " + lastName).trim();
+    if (fullName.includes(query) || query.includes(fullName) ||
+        firstName.includes(query) || lastName.includes(query)) {
+      const name = ((person.firstName() || "") + " " + (person.lastName() || "")).trim();
+      app.delete(person);
+      app.save();
+      return JSON.stringify({ deleted: true, fullName: name }, null, 2);
+    }
   }
+  return JSON.stringify({ error: "No contacts found matching: " + (argv[0] || "") }, null, 2);
 }
 JXAEOF
 }
