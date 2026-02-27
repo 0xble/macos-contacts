@@ -249,7 +249,7 @@ function run(argv) {
     lastName: argv[1] || "",
     organization: argv[2] || ""
   });
-  app.add(person);
+  app.people.push(person);
 
   const phoneLabel = argv[3] || "Mobile";
   const phone = argv[4] || "";
