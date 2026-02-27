@@ -170,7 +170,7 @@ function run(argv) {
       const phones = person.phones();
       for (const phone of phones) {
         const phoneValue = (phone.value() || "").replace(/[\s\-\(\)\+\.]/g, "");
-        if (phoneValue.includes(searchNumber) || searchNumber.includes(phoneValue)) {
+        if (phoneValue && (phoneValue.includes(searchNumber) || searchNumber.includes(phoneValue))) {
           results.push(serializePerson(person));
           break;
         }
@@ -182,7 +182,7 @@ function run(argv) {
       const emails = person.emails();
       for (const email of emails) {
         const emailValue = (email.value() || "").toLowerCase();
-        if (emailValue.includes(searchEmail) || searchEmail.includes(emailValue)) {
+        if (emailValue && (emailValue.includes(searchEmail) || searchEmail.includes(emailValue))) {
           results.push(serializePerson(person));
           break;
         }
@@ -196,7 +196,7 @@ function run(argv) {
       const fullName = (firstName + " " + lastName).trim();
       const org = (person.organization() || "").toLowerCase();
 
-      if (fullName.includes(searchName) || searchName.includes(fullName) ||
+      if (fullName.includes(searchName) || (fullName.length > 0 && searchName.includes(fullName)) ||
           firstName.includes(searchName) || lastName.includes(searchName) ||
           org.includes(searchName)) {
         results.push(serializePerson(person));
@@ -322,7 +322,7 @@ function run(argv) {
     const firstName = (person.firstName() || "").toLowerCase();
     const lastName = (person.lastName() || "").toLowerCase();
     const fullName = (firstName + " " + lastName).trim();
-    if (fullName.includes(query) || query.includes(fullName) ||
+    if (fullName.includes(query) || (fullName.length > 0 && query.includes(fullName)) ||
         firstName.includes(query) || lastName.includes(query)) {
       matches.push(person);
     }
@@ -444,7 +444,7 @@ function run(argv) {
     const firstName = (person.firstName() || "").toLowerCase();
     const lastName = (person.lastName() || "").toLowerCase();
     const fullName = (firstName + " " + lastName).trim();
-    if (fullName.includes(query) || query.includes(fullName) ||
+    if (fullName.includes(query) || (fullName.length > 0 && query.includes(fullName)) ||
         firstName.includes(query) || lastName.includes(query)) {
       const f = person.firstName() || "";
       const l = person.lastName() || "";
@@ -498,7 +498,7 @@ function run(argv) {
     const firstName = (person.firstName() || "").toLowerCase();
     const lastName = (person.lastName() || "").toLowerCase();
     const fullName = (firstName + " " + lastName).trim();
-    if (fullName.includes(query) || query.includes(fullName) ||
+    if (fullName.includes(query) || (fullName.length > 0 && query.includes(fullName)) ||
         firstName.includes(query) || lastName.includes(query)) {
       const name = ((person.firstName() || "") + " " + (person.lastName() || "")).trim();
       app.delete(person);
