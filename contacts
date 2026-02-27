@@ -463,6 +463,15 @@ cmd_delete() {
 
   if [ -n "$CONTACT_ID" ]; then
     MATCH_RESULT=$("$OSASCRIPT_BIN" -l JavaScript - "$CONTACT_ID" <<'JXAEOF'
+function safeRead(getter, fallback = "") {
+  try {
+    const value = getter();
+    return value === null || value === undefined ? fallback : value;
+  } catch (e) {
+    return fallback;
+  }
+}
+
 function run(argv) {
   const app = Application("Contacts");
   const people = app.people();
@@ -470,9 +479,9 @@ function run(argv) {
   let match = null;
 
   for (const person of people) {
-    if ((person.id() || "") === targetId) {
-      const f = person.firstName() || "";
-      const l = person.lastName() || "";
+    if (safeRead(() => person.id(), "") === targetId) {
+      const f = safeRead(() => person.firstName(), "");
+      const l = safeRead(() => person.lastName(), "");
       match = { id: targetId, fullName: (f + " " + l).trim() };
       break;
     }
@@ -488,6 +497,15 @@ JXAEOF
   else
     # First, find the contact(s)
     MATCH_RESULT=$("$OSASCRIPT_BIN" -l JavaScript - "$QUERY" <<'JXAEOF'
+function safeRead(getter, fallback = "") {
+  try {
+    const value = getter();
+    return value === null || value === undefined ? fallback : value;
+  } catch (e) {
+    return fallback;
+  }
+}
+
 function run(argv) {
   const app = Application("Contacts");
   const people = app.people();
@@ -495,14 +513,14 @@ function run(argv) {
 
   const matches = [];
   for (const person of people) {
-    const firstName = (person.firstName() || "").toLowerCase();
-    const lastName = (person.lastName() || "").toLowerCase();
+    const firstName = safeRead(() => person.firstName(), "").toLowerCase();
+    const lastName = safeRead(() => person.lastName(), "").toLowerCase();
     const fullName = (firstName + " " + lastName).trim();
     if (fullName.includes(query) || (fullName.length > 0 && query.includes(fullName)) ||
         firstName.includes(query) || lastName.includes(query)) {
-      const f = person.firstName() || "";
-      const l = person.lastName() || "";
-      matches.push({ id: person.id() || "", fullName: (f + " " + l).trim() });
+      const f = safeRead(() => person.firstName(), "");
+      const l = safeRead(() => person.lastName(), "");
+      matches.push({ id: safeRead(() => person.id(), ""), fullName: (f + " " + l).trim() });
     }
   }
 
@@ -552,15 +570,24 @@ print(json.dumps({'error': 'Multiple contacts match. Be more specific or pass --
   fi
 
   # Delete
-  "$OSASCRIPT_BIN" -l JavaScript - "$MATCH_ID" <<'JXAEOF'
+  DELETE_RESULT=$("$OSASCRIPT_BIN" -l JavaScript - "$MATCH_ID" <<'JXAEOF'
+function safeRead(getter, fallback = "") {
+  try {
+    const value = getter();
+    return value === null || value === undefined ? fallback : value;
+  } catch (e) {
+    return fallback;
+  }
+}
+
 function run(argv) {
   const app = Application("Contacts");
   const people = app.people();
   const targetId = argv[0] || "";
 
   for (const person of people) {
-    if ((person.id() || "") === targetId) {
-      const name = ((person.firstName() || "") + " " + (person.lastName() || "")).trim();
+    if (safeRead(() => person.id(), "") === targetId) {
+      const name = (safeRead(() => person.firstName(), "") + " " + safeRead(() => person.lastName(), "")).trim();
       app.delete(person);
       app.save();
       return JSON.stringify({ deleted: true, fullName: name }, null, 2);
@@ -569,6 +596,14 @@ function run(argv) {
   return JSON.stringify({ error: "No contacts found for contact ID: " + (argv[0] || "") }, null, 2);
 }
 JXAEOF
+)
+  printf '%s\n' "$DELETE_RESULT"
+  printf '%s' "$DELETE_RESULT" | "$PYTHON3_BIN" -c '
+import json, sys
+data = json.load(sys.stdin)
+if not (isinstance(data, dict) and data.get("deleted") is True):
+    sys.exit(1)
+'
 }
 
 # ─────────────────────────────────────────────
