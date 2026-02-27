@@ -139,23 +139,50 @@ function cleanLabel(raw) {
   return raw.replace(/^_\$!</, "").replace(/>!\$_$/, "");
 }
 
+function safeRead(getter, fallback = "") {
+  try {
+    const value = getter();
+    return value === null || value === undefined ? fallback : value;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function safeList(getter) {
+  try {
+    const items = getter();
+    return Array.isArray(items) ? items : [];
+  } catch (e) {
+    return [];
+  }
+}
+
 function serializePerson(person) {
-  const firstName = person.firstName() || "";
-  const lastName = person.lastName() || "";
+  const firstName = safeRead(() => person.firstName(), "");
+  const lastName = safeRead(() => person.lastName(), "");
+  const phones = safeList(() => person.phones());
+  const emails = safeList(() => person.emails());
+  const addresses = safeList(() => person.addresses());
   return {
     firstName,
     lastName,
     fullName: (firstName + " " + lastName).trim(),
-    organization: person.organization() || "",
-    phones: person.phones().map(p => ({ label: cleanLabel(p.label()), value: p.value() || "" })),
-    emails: person.emails().map(e => ({ label: cleanLabel(e.label()), value: e.value() || "" })),
-    addresses: person.addresses().map(a => ({
-      label: cleanLabel(a.label()),
-      street: a.street() || "",
-      city: a.city() || "",
-      state: a.state() || "",
-      zip: a.zip() || "",
-      country: a.country() || ""
+    organization: safeRead(() => person.organization(), ""),
+    phones: phones.map(p => ({
+      label: cleanLabel(safeRead(() => p.label(), "")),
+      value: safeRead(() => p.value(), "")
+    })),
+    emails: emails.map(e => ({
+      label: cleanLabel(safeRead(() => e.label(), "")),
+      value: safeRead(() => e.value(), "")
+    })),
+    addresses: addresses.map(a => ({
+      label: cleanLabel(safeRead(() => a.label(), "")),
+      street: safeRead(() => a.street(), ""),
+      city: safeRead(() => a.city(), ""),
+      state: safeRead(() => a.state(), ""),
+      zip: safeRead(() => a.zip(), ""),
+      country: safeRead(() => a.country(), "")
     }))
   };
 }
@@ -170,9 +197,9 @@ function run(argv) {
   if (searchType === "number") {
     const searchNumber = query.replace(/[\s\-\(\)\+\.]/g, "");
     for (const person of people) {
-      const phones = person.phones();
+      const phones = safeList(() => person.phones());
       for (const phone of phones) {
-        const phoneValue = (phone.value() || "").replace(/[\s\-\(\)\+\.]/g, "");
+        const phoneValue = safeRead(() => phone.value(), "").replace(/[\s\-\(\)\+\.]/g, "");
         if (phoneValue && (phoneValue.includes(searchNumber) || searchNumber.includes(phoneValue))) {
           results.push(serializePerson(person));
           break;
@@ -182,9 +209,9 @@ function run(argv) {
   } else if (searchType === "email") {
     const searchEmail = query.toLowerCase();
     for (const person of people) {
-      const emails = person.emails();
+      const emails = safeList(() => person.emails());
       for (const email of emails) {
-        const emailValue = (email.value() || "").toLowerCase();
+        const emailValue = safeRead(() => email.value(), "").toLowerCase();
         if (emailValue && (emailValue.includes(searchEmail) || searchEmail.includes(emailValue))) {
           results.push(serializePerson(person));
           break;
@@ -194,10 +221,10 @@ function run(argv) {
   } else {
     const searchName = query.toLowerCase();
     for (const person of people) {
-      const firstName = (person.firstName() || "").toLowerCase();
-      const lastName = (person.lastName() || "").toLowerCase();
+      const firstName = safeRead(() => person.firstName(), "").toLowerCase();
+      const lastName = safeRead(() => person.lastName(), "").toLowerCase();
       const fullName = (firstName + " " + lastName).trim();
-      const org = (person.organization() || "").toLowerCase();
+      const org = safeRead(() => person.organization(), "").toLowerCase();
 
       if (fullName.includes(searchName) || (fullName.length > 0 && searchName.includes(fullName)) ||
           firstName.includes(searchName) || lastName.includes(searchName) ||
