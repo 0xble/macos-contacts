@@ -77,18 +77,21 @@ print_edit_help() {
 }
 
 print_delete_help() {
-  echo "Usage: contacts delete <query>"
+  echo "Usage: contacts delete <query> [--yes]"
+  echo "       contacts delete --id <contact-id> [--yes]"
   echo ""
-  echo "Finds a contact by name and deletes it."
+  echo "Deletes a contact by resolved query or explicit contact ID."
   echo "If multiple contacts match, lists them and exits."
   echo "Requires confirmation unless --yes is passed."
   echo ""
   echo "Options:"
   echo "  --yes    Skip confirmation prompt"
+  echo "  --id     Delete by exact contact ID"
   echo ""
   echo "Examples:"
   echo "  contacts delete \"John Doe\""
   echo "  contacts delete \"John Doe\" --yes"
+  echo "  contacts delete --id \"4BEBB2EB-C863-4786-862B-219EE20B49CE:ABPerson\" --yes"
 }
 
 # ─────────────────────────────────────────────
@@ -415,25 +418,76 @@ cmd_delete() {
   fi
 
   SKIP_CONFIRM=""
+  CONTACT_ID=""
   QUERY=""
 
-  # Parse args: query is everything that's not --yes
-  for arg in "$@"; do
-    case "$arg" in
-      --yes) SKIP_CONFIRM="1" ;;
-      *)     QUERY="$QUERY $arg" ;;
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes)
+        SKIP_CONFIRM="1"
+        shift
+        ;;
+      --id)
+        if [ -z "$2" ]; then
+          echo "Error: --id requires a contact ID."
+          print_delete_help
+          exit 1
+        fi
+        CONTACT_ID="$2"
+        shift 2
+        ;;
+      *)
+        QUERY="$QUERY $1"
+        shift
+        ;;
     esac
   done
   QUERY=$(echo "$QUERY" | sed 's/^ //')
 
-  if [ -z "$QUERY" ]; then
+  if [ -n "$CONTACT_ID" ] && [ -n "$QUERY" ]; then
+    echo "Error: provide either a query or --id, not both."
+    print_delete_help
+    exit 1
+  fi
+
+  if [ -z "$CONTACT_ID" ] && [ -z "$QUERY" ]; then
     echo "Error: no search query provided."
     print_delete_help
     exit 1
   fi
 
-  # First, find the contact(s)
-  MATCH_RESULT=$("$OSASCRIPT_BIN" -l JavaScript - "$QUERY" <<'JXAEOF'
+  MATCH_RESULT=""
+  MATCH_COUNT="0"
+  MATCH_NAME=""
+  MATCH_ID=""
+
+  if [ -n "$CONTACT_ID" ]; then
+    MATCH_RESULT=$("$OSASCRIPT_BIN" -l JavaScript - "$CONTACT_ID" <<'JXAEOF'
+function run(argv) {
+  const app = Application("Contacts");
+  const people = app.people();
+  const targetId = argv[0] || "";
+  let match = null;
+
+  for (const person of people) {
+    if ((person.id() || "") === targetId) {
+      const f = person.firstName() || "";
+      const l = person.lastName() || "";
+      match = { id: targetId, fullName: (f + " " + l).trim() };
+      break;
+    }
+  }
+
+  if (match) {
+    return JSON.stringify({ count: 1, matches: [match] });
+  }
+  return JSON.stringify({ count: 0, matches: [] });
+}
+JXAEOF
+    )
+  else
+    # First, find the contact(s)
+    MATCH_RESULT=$("$OSASCRIPT_BIN" -l JavaScript - "$QUERY" <<'JXAEOF'
 function run(argv) {
   const app = Application("Contacts");
   const people = app.people();
@@ -448,34 +502,44 @@ function run(argv) {
         firstName.includes(query) || lastName.includes(query)) {
       const f = person.firstName() || "";
       const l = person.lastName() || "";
-      matches.push((f + " " + l).trim());
+      matches.push({ id: person.id() || "", fullName: (f + " " + l).trim() });
     }
   }
 
   return JSON.stringify({ count: matches.length, matches: matches });
 }
 JXAEOF
-  )
+    )
+  fi
 
   MATCH_COUNT=$(echo "$MATCH_RESULT" | "$PYTHON3_BIN" -c "import sys,json; print(json.load(sys.stdin)['count'])")
 
   if [ "$MATCH_COUNT" = "0" ]; then
-    printf '%s' "$QUERY" | "$PYTHON3_BIN" -c '
+    if [ -n "$CONTACT_ID" ]; then
+      printf '%s' "$CONTACT_ID" | "$PYTHON3_BIN" -c '
+import json, sys
+contact_id = sys.stdin.read()
+print(json.dumps({"error": f"No contacts found for contact ID: {contact_id}"}, indent=2))
+'
+    else
+      printf '%s' "$QUERY" | "$PYTHON3_BIN" -c '
 import json, sys
 query = sys.stdin.read()
 print(json.dumps({"error": f"No contacts found matching: {query}"}, indent=2))
 '
+    fi
     exit 1
   elif [ "$MATCH_COUNT" != "1" ]; then
     echo "$MATCH_RESULT" | "$PYTHON3_BIN" -c "
 import sys, json
 d = json.load(sys.stdin)
-print(json.dumps({'error': 'Multiple contacts match. Be more specific.', 'matches': d['matches']}, indent=2))
+print(json.dumps({'error': 'Multiple contacts match. Be more specific or pass --id.', 'matches': [m.get('fullName', '') for m in d['matches']]}, indent=2))
 "
     exit 1
   fi
 
-  MATCH_NAME=$(echo "$MATCH_RESULT" | "$PYTHON3_BIN" -c "import sys,json; print(json.load(sys.stdin)['matches'][0])")
+  MATCH_NAME=$(echo "$MATCH_RESULT" | "$PYTHON3_BIN" -c "import sys,json; print(json.load(sys.stdin)['matches'][0]['fullName'])")
+  MATCH_ID=$(echo "$MATCH_RESULT" | "$PYTHON3_BIN" -c "import sys,json; print(json.load(sys.stdin)['matches'][0]['id'])")
 
   # Confirm
   if [ -z "$SKIP_CONFIRM" ]; then
@@ -488,25 +552,21 @@ print(json.dumps({'error': 'Multiple contacts match. Be more specific.', 'matche
   fi
 
   # Delete
-  "$OSASCRIPT_BIN" -l JavaScript - "$QUERY" <<'JXAEOF'
+  "$OSASCRIPT_BIN" -l JavaScript - "$MATCH_ID" <<'JXAEOF'
 function run(argv) {
   const app = Application("Contacts");
   const people = app.people();
-  const query = (argv[0] || "").toLowerCase();
+  const targetId = argv[0] || "";
 
   for (const person of people) {
-    const firstName = (person.firstName() || "").toLowerCase();
-    const lastName = (person.lastName() || "").toLowerCase();
-    const fullName = (firstName + " " + lastName).trim();
-    if (fullName.includes(query) || (fullName.length > 0 && query.includes(fullName)) ||
-        firstName.includes(query) || lastName.includes(query)) {
+    if ((person.id() || "") === targetId) {
       const name = ((person.firstName() || "") + " " + (person.lastName() || "")).trim();
       app.delete(person);
       app.save();
       return JSON.stringify({ deleted: true, fullName: name }, null, 2);
     }
   }
-  return JSON.stringify({ error: "No contacts found matching: " + (argv[0] || "") }, null, 2);
+  return JSON.stringify({ error: "No contacts found for contact ID: " + (argv[0] || "") }, null, 2);
 }
 JXAEOF
 }
