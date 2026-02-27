@@ -308,10 +308,28 @@ cmd_edit() {
     esac
   done
 
-  "$OSASCRIPT_BIN" -l JavaScript - "$QUERY" "$SET_FIRST" "$SET_LAST" "$SET_COMPANY" "$ADD_PHONES" "$ADD_EMAILS" "$RM_PHONES" "$RM_EMAILS" <<'JXAEOF'
+  EDIT_RESULT=$("$OSASCRIPT_BIN" -l JavaScript - "$QUERY" "$SET_FIRST" "$SET_LAST" "$SET_COMPANY" "$ADD_PHONES" "$ADD_EMAILS" "$RM_PHONES" "$RM_EMAILS" <<'JXAEOF'
 function cleanLabel(raw) {
   if (!raw) return "";
   return raw.replace(/^_\\\$!</, "").replace(/>!\\\$_$/, "");
+}
+
+function safeRead(getter, fallback = "") {
+  try {
+    const value = getter();
+    return value === null || value === undefined ? fallback : value;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function safeList(getter) {
+  try {
+    const items = getter();
+    return Array.isArray(items) ? items : [];
+  } catch (e) {
+    return [];
+  }
 }
 
 function run(argv) {
@@ -322,8 +340,8 @@ function run(argv) {
   // Find matching contacts
   const matches = [];
   for (const person of people) {
-    const firstName = (person.firstName() || "").toLowerCase();
-    const lastName = (person.lastName() || "").toLowerCase();
+    const firstName = safeRead(() => person.firstName(), "").toLowerCase();
+    const lastName = safeRead(() => person.lastName(), "").toLowerCase();
     const fullName = (firstName + " " + lastName).trim();
     if (fullName.includes(query) || (fullName.length > 0 && query.includes(fullName)) ||
         firstName.includes(query) || lastName.includes(query)) {
@@ -336,8 +354,8 @@ function run(argv) {
   }
   if (matches.length > 1) {
     const names = matches.map(p => {
-      const f = p.firstName() || "";
-      const l = p.lastName() || "";
+      const f = safeRead(() => p.firstName(), "");
+      const l = safeRead(() => p.lastName(), "");
       return (f + " " + l).trim();
     });
     return JSON.stringify({ error: "Multiple contacts match. Be more specific.", matches: names }, null, 2);
@@ -357,9 +375,9 @@ function run(argv) {
   const rmPhones = (argv[6] || "").split("|").filter(x => x);
   for (const rm of rmPhones) {
     const normalized = rm.replace(/[\s\-\(\)\+\.]/g, "");
-    const phones = person.phones();
+    const phones = safeList(() => person.phones());
     for (let i = phones.length - 1; i >= 0; i--) {
-      const val = (phones[i].value() || "").replace(/[\s\-\(\)\+\.]/g, "");
+      const val = safeRead(() => phones[i].value(), "").replace(/[\s\-\(\)\+\.]/g, "");
       if (val.includes(normalized) || normalized.includes(val)) {
         app.delete(phones[i]);
       }
@@ -369,9 +387,9 @@ function run(argv) {
   // Remove emails
   const rmEmails = (argv[7] || "").split("|").filter(x => x);
   for (const rm of rmEmails) {
-    const emails = person.emails();
+    const emails = safeList(() => person.emails());
     for (let i = emails.length - 1; i >= 0; i--) {
-      if ((emails[i].value() || "").toLowerCase() === rm.toLowerCase()) {
+      if (safeRead(() => emails[i].value(), "").toLowerCase() === rm.toLowerCase()) {
         app.delete(emails[i]);
       }
     }
@@ -391,20 +409,28 @@ function run(argv) {
 
   app.save();
 
-  const firstName = person.firstName() || "";
-  const lastName = person.lastName() || "";
+  const firstName = safeRead(() => person.firstName(), "");
+  const lastName = safeRead(() => person.lastName(), "");
 
   return JSON.stringify({
     updated: true,
     fullName: (firstName + " " + lastName).trim(),
     firstName: firstName,
     lastName: lastName,
-    organization: person.organization() || "",
-    phones: person.phones().map(p => ({ label: cleanLabel(p.label()), value: p.value() || "" })),
-    emails: person.emails().map(e => ({ label: cleanLabel(e.label()), value: e.value() || "" }))
+    organization: safeRead(() => person.organization(), ""),
+    phones: safeList(() => person.phones()).map(p => ({ label: cleanLabel(safeRead(() => p.label(), "")), value: safeRead(() => p.value(), "") })),
+    emails: safeList(() => person.emails()).map(e => ({ label: cleanLabel(safeRead(() => e.label(), "")), value: safeRead(() => e.value(), "") }))
   }, null, 2);
 }
 JXAEOF
+)
+  printf '%s\n' "$EDIT_RESULT"
+  printf '%s' "$EDIT_RESULT" | "$PYTHON3_BIN" -c '
+import json, sys
+data = json.load(sys.stdin)
+if isinstance(data, dict) and data.get("error"):
+    sys.exit(1)
+'
 }
 
 # ─────────────────────────────────────────────
