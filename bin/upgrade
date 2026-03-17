@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+cd "$(dirname "$0")/.."
+npm install
+echo "installed macos-contacts from $(git describe --tags --always 2>/dev/null || git rev-parse --short HEAD)"
