@@ -1,5 +1,11 @@
 #!/bin/sh
-set -e
-cd "$(dirname "$0")/.."
-npm install
-echo "installed macos-contacts from $(git describe --tags --always 2>/dev/null || git rev-parse --short HEAD)"
+set -eu
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+install_path="$HOME/.local/bin/contacts"
+
+cd "$repo_root"
+install -m 755 contacts "$install_path"
+
+echo "installed contacts from $(git describe --tags --always 2>/dev/null || git rev-parse --short HEAD)"
+"$install_path" --version

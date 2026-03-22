@@ -19,8 +19,13 @@ print_usage() {
   echo "  add --first <name> [options]                Create a new contact"
   echo "  edit <query> [options]                      Edit an existing contact"
   echo "  delete <query>                              Delete a contact"
+  echo "  version                                     Print version"
   echo ""
   echo "Run 'contacts <command> --help' for details on each command."
+}
+
+print_version() {
+  echo "0.1.0-0xble.0.1.1"
 }
 
 print_search_help() {
@@ -668,6 +673,7 @@ case "$1" in
   add)     shift; cmd_add "$@" ;;
   edit)    shift; cmd_edit "$@" ;;
   delete)  shift; cmd_delete "$@" ;;
+  version|--version) print_version; exit 0 ;;
   --help|-h|"")  print_usage; exit 0 ;;
   # Default: treat as search query
   *)       cmd_search "$@" ;;
