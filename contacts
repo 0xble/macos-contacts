@@ -16,16 +16,26 @@ print_usage() {
   echo ""
   echo "Commands:"
   echo "  search [--name|--number|--email] <query>   Search contacts (default)"
-  echo "  add --first <name> [options]                Create a new contact"
-  echo "  edit <query> [options]                      Edit an existing contact"
-  echo "  delete <query>                              Delete a contact"
-  echo "  version                                     Print version"
+  echo "  list                                       List all contacts"
+  echo "  add --first <name> [options]               Create a new contact"
+  echo "  edit <query> [options]                     Edit an existing contact"
+  echo "  delete <query>                             Delete a contact"
+  echo "  version                                    Print version"
+  echo ""
+  echo "Output is always JSON. '--json' is accepted as a no-op for compatibility."
   echo ""
   echo "Run 'contacts <command> --help' for details on each command."
 }
 
 print_version() {
-  echo "0.1.0-0xble.0.1.1"
+  echo "0.1.0-0xble.0.2.0"
+}
+
+print_list_help() {
+  echo "Usage: contacts list"
+  echo ""
+  echo "Outputs every contact in the Contacts database as a JSON array."
+  echo "Accepts '--json' as a no-op."
 }
 
 print_search_help() {
@@ -106,15 +116,28 @@ print_delete_help() {
 cmd_search() {
   SEARCH_TYPE=""
   QUERY=""
+  POSITIONAL=""
 
-  case "$1" in
-    --name)   SEARCH_TYPE="name";   shift ;;
-    --number) SEARCH_TYPE="number"; shift ;;
-    --email)  SEARCH_TYPE="email";  shift ;;
-    --help)   print_search_help; exit 0 ;;
-  esac
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name)   SEARCH_TYPE="name";   shift ;;
+      --number) SEARCH_TYPE="number"; shift ;;
+      --email)  SEARCH_TYPE="email";  shift ;;
+      --json)   shift ;;
+      --help)   print_search_help; exit 0 ;;
+      --*)      echo "Unknown option: $1" >&2; print_search_help; exit 1 ;;
+      *)
+        if [ -z "$POSITIONAL" ]; then
+          POSITIONAL="$1"
+        else
+          POSITIONAL="$POSITIONAL $1"
+        fi
+        shift
+        ;;
+    esac
+  done
 
-  QUERY="$*"
+  QUERY="$POSITIONAL"
 
   if [ -z "$QUERY" ]; then
     print_search_help
@@ -245,6 +268,85 @@ JXAEOF
 }
 
 # ─────────────────────────────────────────────
+# List
+# ─────────────────────────────────────────────
+
+cmd_list() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) shift ;;
+      --help) print_list_help; exit 0 ;;
+      *)      echo "Unknown option: $1" >&2; print_list_help; exit 1 ;;
+    esac
+  done
+
+  "$OSASCRIPT_BIN" -l JavaScript <<'JXAEOF'
+function cleanLabel(raw) {
+  if (!raw) return "";
+  return raw.replace(/^_\$!</, "").replace(/>!\$_$/, "");
+}
+
+function safeRead(getter, fallback = "") {
+  try {
+    const value = getter();
+    return value === null || value === undefined ? fallback : value;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function safeList(getter) {
+  try {
+    const items = getter();
+    return Array.isArray(items) ? items : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function serializePerson(person) {
+  const firstName = safeRead(() => person.firstName(), "");
+  const lastName = safeRead(() => person.lastName(), "");
+  const phones = safeList(() => person.phones());
+  const emails = safeList(() => person.emails());
+  const addresses = safeList(() => person.addresses());
+  return {
+    firstName,
+    lastName,
+    fullName: (firstName + " " + lastName).trim(),
+    organization: safeRead(() => person.organization(), ""),
+    phones: phones.map(p => ({
+      label: cleanLabel(safeRead(() => p.label(), "")),
+      value: safeRead(() => p.value(), "")
+    })),
+    emails: emails.map(e => ({
+      label: cleanLabel(safeRead(() => e.label(), "")),
+      value: safeRead(() => e.value(), "")
+    })),
+    addresses: addresses.map(a => ({
+      label: cleanLabel(safeRead(() => a.label(), "")),
+      street: safeRead(() => a.street(), ""),
+      city: safeRead(() => a.city(), ""),
+      state: safeRead(() => a.state(), ""),
+      zip: safeRead(() => a.zip(), ""),
+      country: safeRead(() => a.country(), "")
+    }))
+  };
+}
+
+function run() {
+  const app = Application("Contacts");
+  const people = app.people();
+  const results = [];
+  for (const person of people) {
+    results.push(serializePerson(person));
+  }
+  return JSON.stringify(results, null, 2);
+}
+JXAEOF
+}
+
+# ─────────────────────────────────────────────
 # Add
 # ─────────────────────────────────────────────
 
@@ -261,8 +363,9 @@ cmd_add() {
       --phone-label) PHONE_LABEL="$2"; shift 2 ;;
       --email)       EMAIL="$2";       shift 2 ;;
       --email-label) EMAIL_LABEL="$2"; shift 2 ;;
+      --json)        shift ;;
       --help)        print_add_help; exit 0 ;;
-      *)             echo "Unknown option: $1"; print_add_help; exit 1 ;;
+      *)             echo "Unknown option: $1" >&2; print_add_help; exit 1 ;;
     esac
   done
 
@@ -336,7 +439,9 @@ cmd_edit() {
       --add-email) ADD_EMAILS="$ADD_EMAILS|$2"; shift 2 ;;
       --rm-phone)  RM_PHONES="$RM_PHONES|$2";  shift 2 ;;
       --rm-email)  RM_EMAILS="$RM_EMAILS|$2";  shift 2 ;;
-      *)           echo "Unknown option: $1"; print_edit_help; exit 1 ;;
+      --json)      shift ;;
+      --help)      print_edit_help; exit 0 ;;
+      *)           echo "Unknown option: $1" >&2; print_edit_help; exit 1 ;;
     esac
   done
 
@@ -493,6 +598,18 @@ cmd_delete() {
         fi
         CONTACT_ID="$2"
         shift 2
+        ;;
+      --json)
+        shift
+        ;;
+      --help)
+        print_delete_help
+        exit 0
+        ;;
+      --*)
+        echo "Unknown option: $1" >&2
+        print_delete_help
+        exit 1
         ;;
       *)
         QUERY="$QUERY $1"
@@ -670,6 +787,7 @@ if not (isinstance(data, dict) and data.get("deleted") is True):
 
 case "$1" in
   search)  shift; cmd_search "$@" ;;
+  list)    shift; cmd_list "$@" ;;
   add)     shift; cmd_add "$@" ;;
   edit)    shift; cmd_edit "$@" ;;
   delete)  shift; cmd_delete "$@" ;;

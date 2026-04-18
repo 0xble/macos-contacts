@@ -43,6 +43,14 @@ contacts "555-1234"
 contacts --email "example.com"
 ```
 
+### List
+
+```bash
+contacts list
+```
+
+Returns every contact in the Contacts database as a JSON array. Same shape as `search` output.
+
 ### Add
 
 ```bash
@@ -117,3 +125,5 @@ All commands return JSON:
 // delete
 { "deleted": true, "fullName": "John Doe" }
 ```
+
+All commands accept `--json` as a no-op for compatibility with tooling that assumes JSON CLIs opt in via a flag. Output is JSON regardless.
