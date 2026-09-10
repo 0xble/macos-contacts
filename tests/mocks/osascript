@@ -1,0 +1,77 @@
+#!/bin/sh
+# Test double for /usr/bin/osascript used by tests/test_contacts_safety.sh.
+#
+# Records every invocation and the JXA script body it received into
+# $MOCK_CALL_LOG, then replies with the canned response named by
+# $MOCK_RESPONSE_MODE. It never touches the real Contacts database.
+#
+# The recorded script body is what lets the tests assert whether a
+# destructive `app.delete(...)` / `app.save()` JXA payload was ever sent.
+
+set -e
+
+: "${MOCK_CALL_LOG:?MOCK_CALL_LOG must be set}"
+: "${MOCK_RESPONSE_MODE:?MOCK_RESPONSE_MODE must be set}"
+
+script_body=$(cat)
+
+{
+  echo "=== CALL"
+  echo "ARGV: $*"
+  echo "BODY_BEGIN"
+  printf '%s\n' "$script_body"
+  echo "BODY_END"
+} >>"$MOCK_CALL_LOG"
+
+# Classify the call by what the JXA payload actually does, not by argument
+# position, so a refactor that moves arguments cannot silently mislabel a
+# destructive call as a read.
+case "$script_body" in
+  *"app.delete(person)"*)
+    call_kind="delete"
+    ;;
+  *"app.save()"*)
+    call_kind="mutate"
+    ;;
+  *)
+    call_kind="read"
+    ;;
+esac
+
+echo "KIND: $call_kind" >>"$MOCK_CALL_LOG"
+
+case "$MOCK_RESPONSE_MODE" in
+  no_match)
+    # Every lookup finds nothing.
+    echo '{"count": 0, "matches": []}'
+    ;;
+  multi_match)
+    echo '{"count": 2, "matches": [{"id": "ID-1", "fullName": "Ada Lovelace"}, {"id": "ID-2", "fullName": "Ada Byron"}]}'
+    ;;
+  jxa_failure)
+    # The JXA layer itself fails, as osascript does on a scripting error.
+    echo "execution error: Contacts got an error: AppleEvent handler failed. (-10000)" >&2
+    exit 1
+    ;;
+  resolved_delete)
+    if [ "$call_kind" = "delete" ]; then
+      echo '{"deleted": true, "fullName": "Ada Lovelace"}'
+    else
+      echo '{"count": 1, "matches": [{"id": "ID-1", "fullName": "Ada Lovelace"}]}'
+    fi
+    ;;
+  delete_reports_failure)
+    if [ "$call_kind" = "delete" ]; then
+      echo '{"error": "No contacts found for contact ID: ID-1"}'
+    else
+      echo '{"count": 1, "matches": [{"id": "ID-1", "fullName": "Ada Lovelace"}]}'
+    fi
+    ;;
+  edit_no_match)
+    echo '{"error": "No contacts found matching: nobody"}'
+    ;;
+  *)
+    echo "mock: unknown MOCK_RESPONSE_MODE: $MOCK_RESPONSE_MODE" >&2
+    exit 99
+    ;;
+esac
