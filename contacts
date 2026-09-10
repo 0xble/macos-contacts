@@ -4,8 +4,8 @@
 
 set -e
 
-OSASCRIPT_BIN="/usr/bin/osascript"
-PYTHON3_BIN="/usr/bin/python3"
+OSASCRIPT_BIN="${OSASCRIPT_BIN:-/usr/bin/osascript}"
+PYTHON3_BIN="${PYTHON3_BIN:-/usr/bin/python3}"
 
 # ─────────────────────────────────────────────
 # Help
