@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+# Git exports repository-selection variables to hooks; keep preflight and any
+# future fixture repositories anchored to the selected worktree, not GIT_DIR.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+./bin/ci preflight
