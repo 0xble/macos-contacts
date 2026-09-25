@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  printf 'Usage: ./bin/ci preflight | gate <exact-HEAD-SHA> | nightly <exact-HEAD-SHA>\n' >&2
+  exit 64
+}
+
+profile="${1:-}"
+case "$profile" in
+  preflight) [[ $# -eq 1 ]] || usage ;;
+  gate|nightly) [[ $# -eq 2 ]] || usage ;;
+  *) usage ;;
+esac
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$root"
+
+# Fast, offline checks also work on a dirty developer checkout.
+preflight() {
+  git diff --check
+  git diff --cached --check
+  sh -n contacts bin/smoke bin/upgrade tests/test_contacts_safety.sh tests/mocks/osascript .githooks/pre-push
+  bash -n bin/ci
+}
+
+if [[ "$profile" == preflight ]]; then
+  preflight
+  printf 'PASS: preflight (offline syntax and whitespace)\n'
+  exit 0
+fi
+
+expected="$2"
+if [[ ! "$expected" =~ ^[0-9a-f]{40}$ ]]; then
+  printf 'ERROR: expected a full lowercase 40-character commit SHA\n' >&2
+  exit 64
+fi
+
+assert_candidate() {
+  local actual
+  actual="$(git rev-parse HEAD)"
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'ERROR: HEAD differs from expected SHA: %s != %s\n' "$actual" "$expected" >&2
+    exit 1
+  fi
+  if ! git diff --quiet --ignore-submodules=none || ! git diff --cached --quiet --ignore-submodules=none; then
+    printf 'ERROR: tracked candidate tree is dirty at %s\n' "$expected" >&2
+    exit 1
+  fi
+}
+
+assert_candidate
+export CI=true
+preflight
+command -v shellcheck >/dev/null || { printf 'ERROR: install shellcheck before %s\n' "$profile" >&2; exit 1; }
+shellcheck -s sh contacts bin/smoke bin/upgrade tests/test_contacts_safety.sh tests/mocks/osascript .githooks/pre-push
+shellcheck -s bash bin/ci
+sh tests/test_contacts_safety.sh
+if [[ "$profile" == nightly ]]; then
+  # Read-only CLI contract; actual Contacts access is never attempted in CI.
+  ./contacts --version | grep -F '0xble'
+  ./contacts --help | grep -F 'Usage: contacts'
+  ./contacts delete --help | grep -F 'Usage: contacts delete'
+fi
+assert_candidate
+printf 'PASS: %s validated exact SHA %s and an unchanged tracked tree\n' "$profile" "$expected"

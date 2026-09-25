@@ -2,6 +2,16 @@
 
 Manage your macOS Contacts from the terminal. Search, create, edit, and delete contacts. Returns structured JSON. Zero dependencies -- uses built-in macOS tools.
 
+## CI
+
+- `./bin/ci preflight`: offline syntax and whitespace checks (seconds, no installs); the optional pre-push hook runs this profile.
+- `./bin/ci gate "$(git rev-parse HEAD)"`: ShellCheck and the isolated mock-osascript safety suite on a clean exact commit. GitHub's Linux `qualification` job is the merge authority.
+- `./bin/ci nightly "$(git rev-parse HEAD)"`: gate checks plus read-only CLI version/help contract on a clean exact commit. Scheduled at 06:37 UTC; manual dispatch is also available.
+
+Install ShellCheck for local gate/nightly (`brew install shellcheck` on macOS or the distribution package on Linux). Tests use Python 3 and a mocked `osascript`; they never open or modify a real Contacts database. No macOS runner is needed for these checks: actual Contacts automation requires permission to a real private database and is deliberately outside CI.
+
+To enable the hook in a clone without an existing hook manager, run `git config --local core.hooksPath .githooks` from the repository root. First inspect `git config --show-scope --get-all core.hooksPath`: if any path is set, do not overwrite it; configure that existing manager to dispatch `.githooks/pre-push` instead. Cloning does not enable hooks. The hook is feedback only; `qualification` enforces the gate.
+
 ## Install
 
 ```bash
